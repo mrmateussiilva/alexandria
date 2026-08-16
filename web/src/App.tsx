@@ -141,6 +141,14 @@ type EBookSettings = {
   maxWidth: number;
   flow: EBookFlow;
   theme: ReaderTheme;
+  fontFamily: 'serif' | 'sans';
+  lineHeight: number;
+};
+
+type ReaderTOCItem = {
+  label: string;
+  href: string;
+  subitems?: ReaderTOCItem[];
 };
 
 const defaultPDFSettings: PDFSettings = {
@@ -150,10 +158,12 @@ const defaultPDFSettings: PDFSettings = {
 };
 
 const defaultEBookSettings: EBookSettings = {
-  zoom: 1,
-  maxWidth: 720,
+  zoom: 1.1,
+  maxWidth: 680,
   flow: 'paginated',
   theme: 'light',
+  fontFamily: 'serif',
+  lineHeight: 1.7,
 };
 
 function initialAppTheme(): AppTheme {
@@ -1420,7 +1430,8 @@ function PDFReader({ book, onBack }: { book: Book; onBack: () => void }) {
   }, []);
 
   useEffect(() => {
-    if (!pdf || !canvasRef.current || containerWidth === 0) {
+    const pageShell = pageShellRef.current;
+    if (!pdf || !canvasRef.current || !pageShell || containerWidth === 0) {
       return;
     }
 
@@ -1435,7 +1446,14 @@ function PDFReader({ book, onBack }: { book: Book; onBack: () => void }) {
       }
 
       const baseViewport = page.getViewport({ scale: 1 });
-      const fitWidth = Math.min(containerWidth, settings.maxWidth);
+      const currentPageShell = pageShellRef.current;
+      if (!currentPageShell) {
+        return;
+      }
+      const pageShellStyles = window.getComputedStyle(currentPageShell);
+      const horizontalPadding =
+        Number.parseFloat(pageShellStyles.paddingLeft) + Number.parseFloat(pageShellStyles.paddingRight);
+      const fitWidth = Math.min(Math.max(containerWidth - horizontalPadding, 1), settings.maxWidth);
       const fitScale = fitWidth / baseViewport.width;
       const viewport = page.getViewport({ scale: fitScale * settings.zoom });
       const pixelRatio = window.devicePixelRatio || 1;
@@ -1657,8 +1675,14 @@ function EBookReader({ book, onBack }: { book: Book; onBack: () => void }) {
   const [annotationSaving, setAnnotationSaving] = useState(false);
   const [annotationNotice, setAnnotationNotice] = useState('');
   const [settings, setSettings] = useStoredSettings<EBookSettings>(ebookSettingsKey, defaultEBookSettings);
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [tocOpen, setTocOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [toc, setToc] = useState<ReaderTOCItem[]>([]);
   const viewRef = useRef<FoliateViewElement | null>(null);
   const settingsRef = useRef(settings);
+  const controlsTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -1668,9 +1692,56 @@ function EBookReader({ book, onBack }: { book: Book; onBack: () => void }) {
   }, [settings]);
 
   useEffect(() => {
+    if (controlsTimerRef.current !== null) {
+      window.clearTimeout(controlsTimerRef.current);
+      controlsTimerRef.current = null;
+    }
+
+    if (controlsVisible && !settingsOpen && !tocOpen && !moreOpen) {
+      controlsTimerRef.current = window.setTimeout(() => setControlsVisible(false), 3200);
+    }
+
+    return () => {
+      if (controlsTimerRef.current !== null) {
+        window.clearTimeout(controlsTimerRef.current);
+        controlsTimerRef.current = null;
+      }
+    };
+  }, [controlsVisible, settingsOpen, tocOpen, moreOpen]);
+
+  useEffect(() => {
     let cancelled = false;
     const view = document.createElement('foliate-view') as FoliateViewElement;
     viewRef.current = view;
+
+    function onSectionLoad(event: Event) {
+      const { doc } = (event as CustomEvent<{ doc: Document }>).detail;
+      doc.addEventListener('click', (clickEvent) => {
+        if (clickEvent.defaultPrevented || clickEvent.button !== 0) {
+          return;
+        }
+
+        const target = clickEvent.target;
+        if (target instanceof Element && target.closest('a, button, input, select, textarea')) {
+          return;
+        }
+
+        const selection = doc.getSelection();
+        if (selection && !selection.isCollapsed) {
+          return;
+        }
+
+        const width = doc.documentElement.clientWidth || window.innerWidth;
+        const position = clickEvent.clientX / width;
+        if (position < 0.25) {
+          view.prev();
+        } else if (position > 0.75) {
+          view.next();
+        } else {
+          setControlsVisible((visible) => !visible);
+        }
+      });
+    }
 
     async function loadReader() {
       setLoading(true);
@@ -1690,8 +1761,10 @@ function EBookReader({ book, onBack }: { book: Book; onBack: () => void }) {
         }
         target.replaceChildren(view);
 
+        view.addEventListener('load', onSectionLoad as EventListener);
         view.addEventListener('relocate', onRelocate as EventListener);
         await view.open(`/api/books/${book.id}/file`);
+        setToc((view.book?.toc ?? []) as ReaderTOCItem[]);
         applyEBookSettings(view, settingsRef.current);
         if (progress.locator) {
           await view.goTo(progress.locator);
@@ -1732,6 +1805,7 @@ function EBookReader({ book, onBack }: { book: Book; onBack: () => void }) {
     loadReader();
     return () => {
       cancelled = true;
+      view.removeEventListener('load', onSectionLoad as EventListener);
       view.removeEventListener('relocate', onRelocate as EventListener);
       view.close?.();
       view.remove();
@@ -1764,54 +1838,89 @@ function EBookReader({ book, onBack }: { book: Book; onBack: () => void }) {
     }
   }
 
+  function toggleSettingsPanel() {
+    setSettingsOpen((open) => !open);
+    setControlsVisible(true);
+    setTocOpen(false);
+    setMoreOpen(false);
+  }
+
   return (
     <ReaderFrame
       onBack={onBack}
       title={book.filename}
       subtitle={fraction == null ? 'EPUB/MOBI' : `${Math.round(fraction * 100)}%`}
       theme={settings.theme}
+      immersive
+      controlsVisible={controlsVisible}
+      settingsOpen={settingsOpen}
+      onToggleSettings={toggleSettingsPanel}
+      progress={fraction}
       actions={
-        <>
-          <button type="button" onClick={() => saveAnnotation('bookmark')} disabled={annotationSaving || !locator}>
-            Marcar
-          </button>
-          <button type="button" onClick={() => setShowAnnotationPanel(!showAnnotationPanel)}>
-            Nota
-          </button>
-          <button type="button" onClick={() => viewRef.current?.prev()}>
-            Anterior
-          </button>
-          <button type="button" onClick={() => viewRef.current?.next()}>
-            Próxima
-          </button>
-        </>
+        <button
+          type="button"
+          className="reader-icon-button"
+          aria-label="Mais opções"
+          onClick={() => {
+            setMoreOpen((open) => !open);
+            setControlsVisible(true);
+            setSettingsOpen(false);
+            setTocOpen(false);
+          }}
+        >
+          ⋮
+        </button>
       }
       settingsPanel={
         <ReaderSettingsPanel>
           <label>
-            <span>Zoom {Math.round(settings.zoom * 100)}%</span>
+            <span>Tamanho da fonte</span>
+            <div className="reader-stepper">
+              <button
+                type="button"
+                onClick={() => setSettings({ ...settings, zoom: clampNumber(settings.zoom - 0.05, 0.85, 1.5) })}
+              >
+                −
+              </button>
+              <output>{Math.round(16 * settings.zoom)}px</output>
+              <button
+                type="button"
+                onClick={() => setSettings({ ...settings, zoom: clampNumber(settings.zoom + 0.05, 0.85, 1.5) })}
+              >
+                +
+              </button>
+            </div>
+          </label>
+          <label>
+            <span>Fonte</span>
+            <select
+              value={settings.fontFamily}
+              onChange={(event) => setSettings({ ...settings, fontFamily: event.target.value as EBookSettings['fontFamily'] })}
+            >
+              <option value="serif">Serifada</option>
+              <option value="sans">Sem serifa</option>
+            </select>
+          </label>
+          <label>
+            <span>Espaçamento {settings.lineHeight.toFixed(2)}</span>
             <input
-              min="80"
-              max="180"
-              step="5"
+              min="1.5"
+              max="2"
+              step="0.05"
               type="range"
-              value={Math.round(settings.zoom * 100)}
-              onChange={(event) =>
-                setSettings({ ...settings, zoom: clampNumber(Number(event.target.value) / 100, 0.8, 1.8) })
-              }
+              value={settings.lineHeight}
+              onChange={(event) => setSettings({ ...settings, lineHeight: Number(event.target.value) })}
             />
           </label>
           <label>
             <span>Largura do texto {settings.maxWidth}px</span>
             <input
               min="320"
-              max="980"
+              max="900"
               step="20"
               type="range"
               value={settings.maxWidth}
-              onChange={(event) =>
-                setSettings({ ...settings, maxWidth: clampNumber(Number(event.target.value), 320, 980) })
-              }
+              onChange={(event) => setSettings({ ...settings, maxWidth: clampNumber(Number(event.target.value), 320, 900) })}
             />
           </label>
           <label>
@@ -1840,26 +1949,144 @@ function EBookReader({ book, onBack }: { book: Book; onBack: () => void }) {
           </button>
         </ReaderSettingsPanel>
       }
+      bottomBar={
+        <>
+          <button type="button" aria-label="Aparência" onClick={toggleSettingsPanel}>
+            Aa
+          </button>
+          <button
+            type="button"
+            aria-label="Sumário"
+            onClick={() => {
+              setTocOpen((open) => !open);
+              setSettingsOpen(false);
+              setMoreOpen(false);
+              setControlsVisible(true);
+            }}
+          >
+            ☰
+          </button>
+          <button
+            type="button"
+            aria-label="Marcar página"
+            disabled={annotationSaving || !locator}
+            onClick={() => saveAnnotation('bookmark')}
+          >
+            🔖
+          </button>
+          <button
+            type="button"
+            aria-label="Mais opções"
+            onClick={() => {
+              setMoreOpen((open) => !open);
+              setSettingsOpen(false);
+              setTocOpen(false);
+              setControlsVisible(true);
+            }}
+          >
+            ⋮
+          </button>
+        </>
+      }
     >
-      {error ? (
-        <div className="reader-alert" role="alert">
-          {error}
-        </div>
-      ) : null}
-      {annotationNotice ? <div className="reader-notice">{annotationNotice}</div> : null}
-      {showAnnotationPanel ? (
-        <AnnotationEditor
-          disabled={annotationSaving || !locator}
-          note={annotationNote}
-          onCancel={() => setShowAnnotationPanel(false)}
-          onChange={setAnnotationNote}
-          onSave={() => saveAnnotation('note', annotationNote)}
-          placeholder="Nota deste trecho"
-        />
-      ) : null}
-      {loading ? <p className="reader-state">Carregando ebook...</p> : null}
-      <div id="ebook-view" className="ebook-view" />
+      <div className="reader-content-stage">
+        {error ? (
+          <div className="reader-alert" role="alert">
+            {error}
+          </div>
+        ) : null}
+        {annotationNotice ? <div className="reader-notice">{annotationNotice}</div> : null}
+        {showAnnotationPanel ? (
+          <AnnotationEditor
+            disabled={annotationSaving || !locator}
+            note={annotationNote}
+            onCancel={() => setShowAnnotationPanel(false)}
+            onChange={setAnnotationNote}
+            onSave={() => saveAnnotation('note', annotationNote)}
+            placeholder="Nota deste trecho"
+          />
+        ) : null}
+        {moreOpen ? (
+          <div className="reader-more-menu">
+            <button
+              type="button"
+              disabled={annotationSaving || !locator}
+              onClick={() => {
+                setMoreOpen(false);
+                saveAnnotation('bookmark');
+              }}
+            >
+              🔖 Marcar página
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setMoreOpen(false);
+                setShowAnnotationPanel(true);
+              }}
+            >
+              Nota
+            </button>
+          </div>
+        ) : null}
+        {tocOpen ? (
+          <ReaderTOCSheet
+            items={toc}
+            onClose={() => setTocOpen(false)}
+            onSelect={(href) => {
+              void viewRef.current?.goTo(href);
+              setTocOpen(false);
+              setControlsVisible(true);
+            }}
+          />
+        ) : null}
+        {loading ? <p className="reader-state">Carregando ebook...</p> : null}
+        <div id="ebook-view" className="ebook-view" />
+      </div>
     </ReaderFrame>
+  );
+}
+
+function ReaderTOCSheet({
+  items,
+  onClose,
+  onSelect,
+}: {
+  items: ReaderTOCItem[];
+  onClose: () => void;
+  onSelect: (href: string) => void;
+}) {
+  return (
+    <aside className="reader-toc-sheet" aria-label="Sumário">
+      <div className="reader-sheet-header">
+        <strong>Sumário</strong>
+        <button type="button" onClick={onClose}>
+          Fechar
+        </button>
+      </div>
+      {items.length ? (
+        <nav>
+          <ReaderTOCItems items={items} onSelect={onSelect} />
+        </nav>
+      ) : (
+        <p className="reader-state">Este livro não possui sumário.</p>
+      )}
+    </aside>
+  );
+}
+
+function ReaderTOCItems({ items, onSelect }: { items: ReaderTOCItem[]; onSelect: (href: string) => void }) {
+  return (
+    <ul>
+      {items.map((item) => (
+        <li key={`${item.href}-${item.label}`}>
+          <button type="button" onClick={() => onSelect(item.href)}>
+            {item.label}
+          </button>
+          {item.subitems?.length ? <ReaderTOCItems items={item.subitems} onSelect={onSelect} /> : null}
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -1869,6 +2096,12 @@ function ReaderFrame({
   subtitle,
   actions,
   settingsPanel,
+  immersive = false,
+  controlsVisible = true,
+  settingsOpen,
+  onToggleSettings,
+  progress,
+  bottomBar,
   theme = 'dark',
   children,
 }: {
@@ -1877,16 +2110,28 @@ function ReaderFrame({
   subtitle: string;
   actions?: ReactNode;
   settingsPanel?: ReactNode;
+  immersive?: boolean;
+  controlsVisible?: boolean;
+  settingsOpen?: boolean;
+  onToggleSettings?: () => void;
+  progress?: number | null;
+  bottomBar?: ReactNode;
   theme?: ReaderTheme;
   children: ReactNode;
 }) {
-  const [showSettings, setShowSettings] = useState(false);
+  const [localSettingsOpen, setLocalSettingsOpen] = useState(false);
+  const showSettings = settingsOpen ?? localSettingsOpen;
+  const toggleSettings = onToggleSettings ?? (() => setLocalSettingsOpen((open) => !open));
 
   return (
-    <main className={`reader-shell ${theme}`}>
-      <header className="reader-toolbar">
-        <button type="button" onClick={onBack}>
-          Voltar
+    <main
+      className={`reader-shell ${theme} ${immersive ? 'immersive-reader' : ''} ${
+        controlsVisible ? 'reader-controls-visible' : 'reader-controls-hidden'
+      }`}
+    >
+      <header className="reader-toolbar reader-chrome">
+        <button type="button" className="reader-back-button" aria-label="Voltar" onClick={onBack}>
+          {immersive ? '←' : 'Voltar'}
         </button>
         <div className="reader-title">
           <strong>{title}</strong>
@@ -1894,15 +2139,26 @@ function ReaderFrame({
         </div>
         <div className="reader-actions">
           {actions}
-          {settingsPanel ? (
-            <button type="button" onClick={() => setShowSettings(!showSettings)}>
+          {settingsPanel && !immersive ? (
+            <button type="button" onClick={toggleSettings}>
               Ajustes
             </button>
           ) : null}
         </div>
       </header>
-      {showSettings && settingsPanel ? <div className="reader-settings">{settingsPanel}</div> : null}
+      {immersive && progress != null ? (
+        <div className="reader-progress reader-chrome" aria-label={`Progresso ${Math.round(progress * 100)}%`}>
+          <span style={{ width: `${Math.min(Math.max(progress, 0), 1) * 100}%` }} />
+        </div>
+      ) : null}
+      {showSettings && settingsPanel ? (
+        <div className={`reader-settings ${immersive ? 'reader-settings-sheet' : ''}`}>
+          {immersive ? <div className="reader-sheet-header"><strong>Aparência</strong><button type="button" onClick={toggleSettings}>Fechar</button></div> : null}
+          {settingsPanel}
+        </div>
+      ) : null}
       {children}
+      {immersive && bottomBar ? <footer className="reader-bottom-bar reader-chrome">{bottomBar}</footer> : null}
     </main>
   );
 }
@@ -2212,13 +2468,18 @@ function applyEBookSettings(view: FoliateViewElement, settings: EBookSettings) {
 
   renderer.setAttribute('flow', settings.flow);
   renderer.setAttribute('max-inline-size', `${settings.maxWidth}px`);
+  renderer.setAttribute('margin', '12px');
+  renderer.setAttribute('gap', '4%');
   renderer.setAttribute('max-column-count', '1');
   renderer.setStyles?.(ebookContentCSS(settings));
 }
 
 function ebookContentCSS(settings: EBookSettings) {
   const theme = readerThemeColors(settings.theme);
-  const fontPercent = Math.round(settings.zoom * 100);
+  const fontSize = Math.round(16 * settings.zoom);
+  const fontFamily = settings.fontFamily === 'sans'
+    ? 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+    : 'Georgia, "Times New Roman", serif';
 
   return `
     :root {
@@ -2227,17 +2488,43 @@ function ebookContentCSS(settings: EBookSettings) {
       color: ${theme.fg} !important;
     }
 
+    html {
+      min-height: 0 !important;
+      height: auto !important;
+    }
+
     body {
       background: ${theme.surface} !important;
       color: ${theme.fg} !important;
-      font-size: ${fontPercent}% !important;
-      line-height: 1.62 !important;
+      font-family: ${fontFamily} !important;
+      font-size: ${fontSize}px !important;
+      line-height: ${settings.lineHeight} !important;
+      height: auto !important;
+      min-height: 0 !important;
+      margin: 0 !important;
     }
 
     p,
     li,
     blockquote {
-      line-height: 1.62 !important;
+      line-height: ${settings.lineHeight} !important;
+      margin-block-start: 0;
+      margin-block-end: 1em;
+    }
+
+    h1,
+    h2,
+    h3,
+    h4,
+    h5,
+    h6 {
+      margin-block-start: 1.5em;
+      margin-block-end: .75em;
+    }
+
+    body > * {
+      max-width: 100%;
+      min-height: 0 !important;
     }
 
     a {
@@ -2249,6 +2536,12 @@ function ebookContentCSS(settings: EBookSettings) {
     video {
       max-width: 100% !important;
       height: auto;
+      object-fit: contain;
+    }
+
+    table {
+      max-width: 100%;
+      overflow-x: auto;
     }
   `;
 }

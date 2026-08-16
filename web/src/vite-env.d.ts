@@ -13,6 +13,9 @@ type FoliateRendererElement = HTMLElement & {
 
 type FoliateViewElement = HTMLElement & {
   renderer?: FoliateRendererElement;
+  book?: {
+    toc?: unknown[];
+  };
   open: (book: string) => Promise<void>;
   init: (options: { lastLocation?: string; showTextStart?: boolean }) => Promise<void>;
   goTo: (target: string | number | { fraction: number }) => Promise<unknown>;
