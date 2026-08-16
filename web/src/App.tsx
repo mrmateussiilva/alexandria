@@ -1716,30 +1716,63 @@ function EBookReader({ book, onBack }: { book: Book; onBack: () => void }) {
 
     function onSectionLoad(event: Event) {
       const { doc } = (event as CustomEvent<{ doc: Document }>).detail;
+      let touchStart: { x: number; y: number; time: number } | null = null;
+      let lastTouchAt = 0;
+
+      function navigateFromPosition(clientX: number) {
+        const width = doc.documentElement.clientWidth || window.innerWidth;
+        const position = clientX / width;
+        if (position < 0.25) {
+          void view.prev();
+        } else if (position > 0.75) {
+          void view.next();
+        } else {
+          setControlsVisible((visible) => !visible);
+        }
+      }
+
+      function canHandleTap(target: EventTarget | null) {
+        return !(target instanceof Element && target.closest('a, button, input, select, textarea'));
+      }
+
+      function hasSelection() {
+        const selection = doc.getSelection();
+        return Boolean(selection && !selection.isCollapsed);
+      }
+
+      doc.addEventListener('touchstart', (touchEvent) => {
+        const touch = touchEvent.changedTouches[0];
+        if (touch) {
+          touchStart = { x: touch.clientX, y: touch.clientY, time: touchEvent.timeStamp };
+        }
+      }, { passive: true });
+
+      doc.addEventListener('touchend', (touchEvent) => {
+        const touch = touchEvent.changedTouches[0];
+        if (!touch || !touchStart || !canHandleTap(touchEvent.target) || hasSelection()) {
+          touchStart = null;
+          return;
+        }
+
+        const elapsed = touchEvent.timeStamp - touchStart.time;
+        const distance = Math.hypot(touch.clientX - touchStart.x, touch.clientY - touchStart.y);
+        touchStart = null;
+        if (elapsed <= 600 && distance <= 18) {
+          lastTouchAt = Date.now();
+          navigateFromPosition(touch.clientX);
+        }
+      }, { passive: true });
+
       doc.addEventListener('click', (clickEvent) => {
         if (clickEvent.defaultPrevented || clickEvent.button !== 0) {
           return;
         }
 
-        const target = clickEvent.target;
-        if (target instanceof Element && target.closest('a, button, input, select, textarea')) {
+        if (Date.now() - lastTouchAt < 600 || !canHandleTap(clickEvent.target) || hasSelection()) {
           return;
         }
 
-        const selection = doc.getSelection();
-        if (selection && !selection.isCollapsed) {
-          return;
-        }
-
-        const width = doc.documentElement.clientWidth || window.innerWidth;
-        const position = clickEvent.clientX / width;
-        if (position < 0.25) {
-          view.prev();
-        } else if (position > 0.75) {
-          view.next();
-        } else {
-          setControlsVisible((visible) => !visible);
-        }
+        navigateFromPosition(clickEvent.clientX);
       });
     }
 
@@ -1822,7 +1855,7 @@ function EBookReader({ book, onBack }: { book: Book; onBack: () => void }) {
         body: JSON.stringify({
           kind,
           locator,
-          fraction,
+          fraction: fraction ?? 0,
           note,
         }),
       });
@@ -1844,6 +1877,8 @@ function EBookReader({ book, onBack }: { book: Book; onBack: () => void }) {
     setTocOpen(false);
     setMoreOpen(false);
   }
+
+  const canAnnotate = !annotationSaving && !loading && !error;
 
   return (
     <ReaderFrame
@@ -1969,7 +2004,7 @@ function EBookReader({ book, onBack }: { book: Book; onBack: () => void }) {
           <button
             type="button"
             aria-label="Marcar página"
-            disabled={annotationSaving || !locator}
+            disabled={!canAnnotate}
             onClick={() => saveAnnotation('bookmark')}
           >
             🔖
@@ -1998,7 +2033,7 @@ function EBookReader({ book, onBack }: { book: Book; onBack: () => void }) {
         {annotationNotice ? <div className="reader-notice">{annotationNotice}</div> : null}
         {showAnnotationPanel ? (
           <AnnotationEditor
-            disabled={annotationSaving || !locator}
+            disabled={!canAnnotate}
             note={annotationNote}
             onCancel={() => setShowAnnotationPanel(false)}
             onChange={setAnnotationNote}
@@ -2010,7 +2045,7 @@ function EBookReader({ book, onBack }: { book: Book; onBack: () => void }) {
           <div className="reader-more-menu">
             <button
               type="button"
-              disabled={annotationSaving || !locator}
+              disabled={!canAnnotate}
               onClick={() => {
                 setMoreOpen(false);
                 saveAnnotation('bookmark');
@@ -2223,6 +2258,7 @@ async function requestJSON<T>(path: string, init: RequestInit = {}): Promise<T> 
   if (response.status === 204) {
     return undefined as T;
   }
+
 
   const data = (await response.json()) as T | ApiError;
   if (!response.ok) {

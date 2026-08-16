@@ -1249,7 +1249,7 @@ td span {
 
 .reader-settings-sheet {
   position: absolute;
-  z-index: 5;
+  z-index: 20;
   inset: auto 0 0;
   max-height: min(70dvh, 520px);
   overflow-y: auto;
@@ -1328,6 +1328,7 @@ td span {
   flex: 1 1 auto;
   flex-direction: column;
   min-height: 0;
+  isolation: isolate;
 }
 
 .immersive-reader .ebook-view {
@@ -1340,7 +1341,7 @@ td span {
 
 .reader-bottom-bar {
   position: absolute;
-  z-index: 4;
+  z-index: 20;
   inset: auto 0 0;
   display: flex;
   justify-content: space-around;
@@ -1360,7 +1361,7 @@ td span {
 
 .reader-more-menu {
   position: absolute;
-  z-index: 6;
+  z-index: 30;
   right: 12px;
   bottom: calc(62px + env(safe-area-inset-bottom));
   display: grid;
@@ -1383,7 +1384,7 @@ td span {
 
 .reader-toc-sheet {
   position: absolute;
-  z-index: 5;
+  z-index: 20;
   inset: 12px 12px 68px;
   overflow: auto;
   border: 1px solid var(--reader-border);
