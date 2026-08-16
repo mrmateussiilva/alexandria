@@ -136,6 +136,11 @@ type PDFSettings = {
   theme: ReaderTheme;
 };
 
+type PDFRenderTask = {
+  cancel: () => void;
+  promise: Promise<unknown>;
+};
+
 type EBookSettings = {
   zoom: number;
   maxWidth: number;
@@ -1381,6 +1386,8 @@ function PDFReader({ book, onBack }: { book: Book; onBack: () => void }) {
   const controlsTimerRef = useRef<number | null>(null);
   const touchStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
   const lastTouchAtRef = useRef(0);
+  const renderQueueRef = useRef(Promise.resolve());
+  const renderGenerationRef = useRef(0);
 
   useEffect(() => {
     if (controlsTimerRef.current !== null) {
@@ -1460,61 +1467,79 @@ function PDFReader({ book, onBack }: { book: Book; onBack: () => void }) {
     }
 
     let cancelled = false;
+    let renderTask: PDFRenderTask | null = null;
+    let releaseRender: (() => void) | null = null;
+    const generation = ++renderGenerationRef.current;
+    const previousRender = renderQueueRef.current;
+    const currentRender = new Promise<void>((resolve) => {
+      releaseRender = resolve;
+    });
+    renderQueueRef.current = currentRender;
     const document = pdf;
     setRendering(true);
 
     async function renderPage() {
-      const page = await document.getPage(pageNumber);
-      if (cancelled || !canvasRef.current) {
-        return;
-      }
+      try {
+        await previousRender;
+        if (cancelled || !canvasRef.current) {
+          return;
+        }
 
-      const baseViewport = page.getViewport({ scale: 1 });
-      const currentPageShell = pageShellRef.current;
-      if (!currentPageShell) {
-        return;
-      }
-      const pageShellStyles = window.getComputedStyle(currentPageShell);
-      const horizontalPadding =
-        Number.parseFloat(pageShellStyles.paddingLeft) + Number.parseFloat(pageShellStyles.paddingRight);
-      const fitWidth = Math.min(Math.max(containerWidth - horizontalPadding, 1), settings.maxWidth);
-      const fitScale = fitWidth / baseViewport.width;
-      const viewport = page.getViewport({ scale: fitScale * settings.zoom });
-      const pixelRatio = window.devicePixelRatio || 1;
-      const canvas = canvasRef.current;
-      const context = canvas.getContext('2d');
-      if (!context) {
-        return;
-      }
+        const page = await document.getPage(pageNumber);
+        if (cancelled || !canvasRef.current) {
+          return;
+        }
 
-      canvas.width = Math.floor(viewport.width * pixelRatio);
-      canvas.height = Math.floor(viewport.height * pixelRatio);
-      canvas.style.width = `${Math.floor(viewport.width)}px`;
-      canvas.style.height = `${Math.floor(viewport.height)}px`;
+        const baseViewport = page.getViewport({ scale: 1 });
+        const currentPageShell = pageShellRef.current;
+        if (!currentPageShell) {
+          return;
+        }
+        const pageShellStyles = window.getComputedStyle(currentPageShell);
+        const horizontalPadding =
+          Number.parseFloat(pageShellStyles.paddingLeft) + Number.parseFloat(pageShellStyles.paddingRight);
+        const fitWidth = Math.min(Math.max(containerWidth - horizontalPadding, 1), settings.maxWidth);
+        const fitScale = fitWidth / baseViewport.width;
+        const viewport = page.getViewport({ scale: fitScale * settings.zoom });
+        const pixelRatio = window.devicePixelRatio || 1;
+        const canvas = canvasRef.current;
+        const context = canvas.getContext('2d');
+        if (!context) {
+          return;
+        }
 
-      const task = page.render({
-        canvas,
-        canvasContext: context,
-        viewport,
-        transform: pixelRatio === 1 ? undefined : [pixelRatio, 0, 0, pixelRatio, 0, 0],
-      });
-      await task.promise;
+        canvas.width = Math.floor(viewport.width * pixelRatio);
+        canvas.height = Math.floor(viewport.height * pixelRatio);
+        canvas.style.width = `${Math.floor(viewport.width)}px`;
+        canvas.style.height = `${Math.floor(viewport.height)}px`;
+
+        renderTask = page.render({
+          canvas,
+          canvasContext: context,
+          viewport,
+          transform: pixelRatio === 1 ? undefined : [pixelRatio, 0, 0, pixelRatio, 0, 0],
+        });
+        await renderTask.promise;
+      } finally {
+        releaseRender?.();
+      }
     }
 
     renderPage()
       .catch((err) => {
-        if (!cancelled && err instanceof Error && err.name !== 'RenderingCancelledException') {
+        if (!cancelled && generation === renderGenerationRef.current && err instanceof Error && err.name !== 'RenderingCancelledException') {
           setError(errorMessage(err));
         }
       })
       .finally(() => {
-        if (!cancelled) {
+        if (!cancelled && generation === renderGenerationRef.current) {
           setRendering(false);
         }
       });
 
     return () => {
       cancelled = true;
+      renderTask?.cancel();
     };
   }, [pdf, pageNumber, settings, containerWidth]);
 
