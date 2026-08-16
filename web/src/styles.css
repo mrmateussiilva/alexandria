@@ -1301,12 +1301,11 @@ td span {
 }
 
 .reader-page-shell {
-  display: grid;
+  display: block;
   flex: 1 1 auto;
   min-height: 0;
-  align-items: start;
-  justify-items: safe center;
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
   background: var(--reader-page-bg);
@@ -1314,6 +1313,7 @@ td span {
 }
 
 .pdf-reader-page {
+  display: block;
   touch-action: pan-y;
 }
 
@@ -1465,6 +1465,7 @@ td span {
 .pdf-page {
   display: block;
   max-width: none;
+  margin-inline: auto;
   flex: 0 0 auto;
   background: #ffffff;
   box-shadow: 0 12px 30px rgb(0 0 0 / 28%);
