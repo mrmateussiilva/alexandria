@@ -1320,6 +1320,13 @@ td span {
 .immersive-reader .pdf-reader-page {
   flex: 1 1 auto;
   width: 100%;
+  padding-top: calc(60px + env(safe-area-inset-top));
+  padding-bottom: calc(72px + env(safe-area-inset-bottom));
+}
+
+.reader-controls-hidden .pdf-reader-page {
+  padding-top: 8px;
+  padding-bottom: 8px;
 }
 
 .ebook-view {
