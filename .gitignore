@@ -1,0 +1,16 @@
+bin/
+.cache/
+/config/
+/books/
+*.db
+*.db-shm
+*.db-wal
+coverage.out
+
+web/node_modules/
+web/dist/*
+!web/dist/
+!web/dist/.gitkeep
+
+.env
+.DS_Store

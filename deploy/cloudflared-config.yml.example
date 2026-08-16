@@ -1,0 +1,9 @@
+# Exemplo para cloudflared instalado no VPS host.
+# Substitua o hostname, tunnel e o caminho das credenciais.
+tunnel: seu-tunnel-id
+credentials-file: /etc/cloudflared/seu-tunnel-id.json
+
+ingress:
+  - hostname: livros.seu-dominio.com
+    service: http://127.0.0.1:8080
+  - service: http_status:404

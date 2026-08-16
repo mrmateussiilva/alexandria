@@ -1,0 +1,2 @@
+-- Initial migration placeholder.
+-- Business tables will be added only when their features are implemented.

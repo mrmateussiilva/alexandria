@@ -1,0 +1,29 @@
+services:
+  alexandria:
+    build: .
+    image: alexandria:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${ALEXANDRIA_PORT:-8080}:${ALEXANDRIA_SERVER_PORT:-8080}"
+    environment:
+      ALEXANDRIA_SERVER_ADDRESS: 0.0.0.0
+      ALEXANDRIA_SERVER_PORT: ${ALEXANDRIA_SERVER_PORT:-8080}
+      ALEXANDRIA_DATABASE_PATH: /config/alexandria.db
+      ALEXANDRIA_CACHE_PATH: /config/cache
+      ALEXANDRIA_AUTH_ENABLED: ${ALEXANDRIA_AUTH_ENABLED:-true}
+      ALEXANDRIA_AUTH_USERNAME: ${ALEXANDRIA_AUTH_USERNAME:-admin}
+      ALEXANDRIA_AUTH_PASSWORD: ${ALEXANDRIA_AUTH_PASSWORD:-alexandria}
+      ALEXANDRIA_AUTH_SECRET: ${ALEXANDRIA_AUTH_SECRET:-change-me-alexandria-local-secret}
+      ALEXANDRIA_AI_ENABLED: ${ALEXANDRIA_AI_ENABLED:-}
+      ALEXANDRIA_GEMINI_API_KEY: ${ALEXANDRIA_GEMINI_API_KEY:-}
+      ALEXANDRIA_AI_MODEL: ${ALEXANDRIA_AI_MODEL:-gemini-2.5-flash-lite}
+      ALEXANDRIA_AI_TIMEOUT_SECONDS: ${ALEXANDRIA_AI_TIMEOUT_SECONDS:-20}
+    volumes:
+      - ${ALEXANDRIA_CONFIG_PATH:-./config}:/config
+      - ${ALEXANDRIA_BOOKS_PATH:-/media/mateus/69B9-F5F5/Livros}:/books:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:$${ALEXANDRIA_SERVER_PORT:-8080}/api/health >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
