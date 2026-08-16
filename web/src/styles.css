@@ -1313,6 +1313,15 @@ td span {
   padding: 12px;
 }
 
+.pdf-reader-page {
+  touch-action: pan-y;
+}
+
+.immersive-reader .pdf-reader-page {
+  flex: 1 1 auto;
+  width: 100%;
+}
+
 .ebook-view {
   flex: 1 1 auto;
   width: 100%;
@@ -1359,6 +1368,16 @@ td span {
   font-size: 1.1rem;
 }
 
+.reader-page-indicator {
+  display: inline-flex;
+  min-width: 72px;
+  align-items: center;
+  justify-content: center;
+  color: var(--reader-muted);
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+}
+
 .reader-more-menu {
   position: absolute;
   z-index: 30;
@@ -1380,6 +1399,18 @@ td span {
   color: var(--reader-fg);
   padding: 10px;
   text-align: left;
+}
+
+.reader-page-jump {
+  grid-template-columns: 1fr 76px;
+  align-items: center;
+  padding: 6px 10px;
+}
+
+.reader-page-jump input {
+  min-height: 38px;
+  padding: 6px 8px;
+  text-align: center;
 }
 
 .reader-toc-sheet {

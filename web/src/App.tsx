@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, MouseEvent as ReactMouseEvent, TouchEvent as ReactTouchEvent, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import pdfWorkerURL from 'pdfjs-dist/build/pdf.worker.mjs?url';
@@ -1373,8 +1373,32 @@ function PDFReader({ book, onBack }: { book: Book; onBack: () => void }) {
   const [showAnnotationPanel, setShowAnnotationPanel] = useState(false);
   const [annotationSaving, setAnnotationSaving] = useState(false);
   const [annotationNotice, setAnnotationNotice] = useState('');
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const pageShellRef = useRef<HTMLDivElement | null>(null);
+  const controlsTimerRef = useRef<number | null>(null);
+  const touchStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
+  const lastTouchAtRef = useRef(0);
+
+  useEffect(() => {
+    if (controlsTimerRef.current !== null) {
+      window.clearTimeout(controlsTimerRef.current);
+      controlsTimerRef.current = null;
+    }
+
+    if (controlsVisible && !settingsOpen && !moreOpen) {
+      controlsTimerRef.current = window.setTimeout(() => setControlsVisible(false), 3200);
+    }
+
+    return () => {
+      if (controlsTimerRef.current !== null) {
+        window.clearTimeout(controlsTimerRef.current);
+        controlsTimerRef.current = null;
+      }
+    };
+  }, [controlsVisible, settingsOpen, moreOpen]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1514,7 +1538,59 @@ function PDFReader({ book, onBack }: { book: Book; onBack: () => void }) {
 
   function goToPage(nextPage: number) {
     setPageNumber(clampPage(nextPage, totalPages || 1));
-    pageShellRef.current?.scrollTo({ top: 0 });
+    pageShellRef.current?.scrollTo({ top: 0, left: 0 });
+  }
+
+  function navigateFromPosition(clientX: number) {
+    const node = pageShellRef.current;
+    if (!node) {
+      return;
+    }
+
+    const position = (clientX - node.getBoundingClientRect().left) / node.clientWidth;
+    if (position < 0.25) {
+      goToPage(pageNumber - 1);
+    } else if (position > 0.75) {
+      goToPage(pageNumber + 1);
+    } else {
+      setControlsVisible((visible) => !visible);
+    }
+  }
+
+  function handlePageTouchStart(event: ReactTouchEvent<HTMLDivElement>) {
+    const touch = event.changedTouches[0];
+    if (touch) {
+      touchStartRef.current = { x: touch.clientX, y: touch.clientY, time: event.timeStamp };
+    }
+  }
+
+  function handlePageTouchEnd(event: ReactTouchEvent<HTMLDivElement>) {
+    const touch = event.changedTouches[0];
+    const start = touchStartRef.current;
+    touchStartRef.current = null;
+    if (!touch || !start) {
+      return;
+    }
+
+    const deltaX = touch.clientX - start.x;
+    const deltaY = touch.clientY - start.y;
+    const elapsed = event.timeStamp - start.time;
+    if (Math.abs(deltaX) > 48 && Math.abs(deltaX) > Math.abs(deltaY)) {
+      goToPage(deltaX < 0 ? pageNumber + 1 : pageNumber - 1);
+      return;
+    }
+
+    if (elapsed <= 600 && Math.hypot(deltaX, deltaY) <= 18) {
+      lastTouchAtRef.current = Date.now();
+      navigateFromPosition(touch.clientX);
+    }
+  }
+
+  function handlePageClick(event: ReactMouseEvent<HTMLDivElement>) {
+    if (Date.now() - lastTouchAtRef.current < 600) {
+      return;
+    }
+    navigateFromPosition(event.clientX);
   }
 
   async function saveAnnotation(kind: BookAnnotation['kind'], note = '') {
@@ -1543,33 +1619,39 @@ function PDFReader({ book, onBack }: { book: Book; onBack: () => void }) {
     }
   }
 
+  function toggleSettingsPanel() {
+    setSettingsOpen((open) => !open);
+    setControlsVisible(true);
+    setMoreOpen(false);
+  }
+
+  const canAnnotate = !annotationSaving && !loading && !error && totalPages > 0;
+  const progress = totalPages > 1 ? (pageNumber - 1) / (totalPages - 1) : 0;
+
   return (
     <ReaderFrame
       onBack={onBack}
       title={book.filename}
       subtitle={`Página ${pageNumber}${totalPages ? ` de ${totalPages}` : ''}`}
       theme={settings.theme}
+      immersive
+      controlsVisible={controlsVisible}
+      settingsOpen={settingsOpen}
+      onToggleSettings={toggleSettingsPanel}
+      progress={progress}
       actions={
-        <>
-          <button type="button" onClick={() => saveAnnotation('bookmark')} disabled={annotationSaving || !totalPages}>
-            Marcar
-          </button>
-          <button type="button" onClick={() => setShowAnnotationPanel(!showAnnotationPanel)}>
-            Nota
-          </button>
-          <button
-            type="button"
-            onClick={() => setSettings({ ...settings, zoom: clampNumber(settings.zoom - 0.15, 0.7, 2.4) })}
-          >
-            -
-          </button>
-          <button
-            type="button"
-            onClick={() => setSettings({ ...settings, zoom: clampNumber(settings.zoom + 0.15, 0.7, 2.4) })}
-          >
-            +
-          </button>
-        </>
+        <button
+          type="button"
+          className="reader-icon-button"
+          aria-label="Mais opções"
+          onClick={() => {
+            setMoreOpen((open) => !open);
+            setSettingsOpen(false);
+            setControlsVisible(true);
+          }}
+        >
+          ⋮
+        </button>
       }
       settingsPanel={
         <ReaderSettingsPanel>
@@ -1615,52 +1697,88 @@ function PDFReader({ book, onBack }: { book: Book; onBack: () => void }) {
           </button>
         </ReaderSettingsPanel>
       }
+      bottomBar={
+        <>
+          <button type="button" aria-label="Aparência" onClick={toggleSettingsPanel}>
+            Aa
+          </button>
+          <button type="button" aria-label="Página anterior" disabled={pageNumber <= 1} onClick={() => goToPage(pageNumber - 1)}>
+            ‹
+          </button>
+          <span className="reader-page-indicator">
+            {pageNumber} / {totalPages || '—'}
+          </span>
+          <button type="button" aria-label="Próxima página" disabled={!totalPages || pageNumber >= totalPages} onClick={() => goToPage(pageNumber + 1)}>
+            ›
+          </button>
+          <button type="button" aria-label="Marcar página" disabled={!canAnnotate} onClick={() => saveAnnotation('bookmark')}>
+            🔖
+          </button>
+          <button
+            type="button"
+            aria-label="Mais opções"
+            onClick={() => {
+              setMoreOpen((open) => !open);
+              setSettingsOpen(false);
+              setControlsVisible(true);
+            }}
+          >
+            ⋮
+          </button>
+        </>
+      }
     >
-
-      {error ? (
-        <div className="reader-alert" role="alert">
-          {error}
-        </div>
-      ) : null}
-      {annotationNotice ? <div className="reader-notice">{annotationNotice}</div> : null}
-      {showAnnotationPanel ? (
-        <AnnotationEditor
-          disabled={annotationSaving}
-          note={annotationNote}
-          onCancel={() => setShowAnnotationPanel(false)}
-          onChange={setAnnotationNote}
-          onSave={() => saveAnnotation('note', annotationNote)}
-          placeholder={`Nota da página ${pageNumber}`}
-        />
-      ) : null}
-
-      <div className="reader-page-shell" ref={pageShellRef}>
-        {loading ? <p className="reader-state">Carregando PDF...</p> : null}
-        {!loading && !error ? (
-          <canvas className={rendering ? 'pdf-page rendering' : 'pdf-page'} ref={canvasRef} />
+      <div className="reader-content-stage">
+        {error ? (
+          <div className="reader-alert" role="alert">
+            {error}
+          </div>
         ) : null}
-      </div>
-
-      <footer className="reader-footer">
-        <button type="button" disabled={pageNumber <= 1} onClick={() => goToPage(pageNumber - 1)}>
-          Anterior
-        </button>
-        <input
-          aria-label="Página atual"
-          min={1}
-          max={totalPages || 1}
-          type="number"
-          value={pageNumber}
-          onChange={(event) => goToPage(Number(event.target.value))}
-        />
-        <button
-          type="button"
-          disabled={totalPages === 0 || pageNumber >= totalPages}
-          onClick={() => goToPage(pageNumber + 1)}
+        {annotationNotice ? <div className="reader-notice">{annotationNotice}</div> : null}
+        {showAnnotationPanel ? (
+          <AnnotationEditor
+            disabled={!canAnnotate}
+            note={annotationNote}
+            onCancel={() => setShowAnnotationPanel(false)}
+            onChange={setAnnotationNote}
+            onSave={() => saveAnnotation('note', annotationNote)}
+            placeholder={`Nota da página ${pageNumber}`}
+          />
+        ) : null}
+        {moreOpen ? (
+          <div className="reader-more-menu">
+            <button type="button" disabled={!canAnnotate} onClick={() => { setMoreOpen(false); void saveAnnotation('bookmark'); }}>
+              🔖 Marcar página
+            </button>
+            <button type="button" onClick={() => { setMoreOpen(false); setShowAnnotationPanel(true); }}>
+              Nota
+            </button>
+            <label className="reader-page-jump">
+              <span>Ir para página</span>
+              <input
+                aria-label="Ir para página"
+                min={1}
+                max={totalPages || 1}
+                type="number"
+                value={pageNumber}
+                onChange={(event) => goToPage(Number(event.target.value))}
+              />
+            </label>
+          </div>
+        ) : null}
+        <div
+          className="reader-page-shell pdf-reader-page"
+          ref={pageShellRef}
+          onClick={handlePageClick}
+          onTouchStart={handlePageTouchStart}
+          onTouchEnd={handlePageTouchEnd}
         >
-          Próxima
-        </button>
-      </footer>
+          {loading ? <p className="reader-state">Carregando PDF...</p> : null}
+          {!loading && !error ? (
+            <canvas className={rendering ? 'pdf-page rendering' : 'pdf-page'} ref={canvasRef} />
+          ) : null}
+        </div>
+      </div>
     </ReaderFrame>
   );
 }
